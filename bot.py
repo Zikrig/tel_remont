@@ -275,32 +275,48 @@ def repair_models_keyboard(models: List[str], back_callback: str = "back_repair_
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def get_problem_options_for_category(category_key: str) -> List[tuple[str, str]]:
+def get_problem_options_for_category(category_key: str) -> List[Dict[str, str]]:
     get_cfg()
     raw_options = config.get(repair_problem_category_key(category_key))
     if raw_options is None:
         by_category = config.get("repair_problems_by_category", {})
         raw_options = by_category.get(category_key)
     if not raw_options:
-        return REPAIR_PROBLEM_KEYS
+        return [{"key": k, "title": t} for k, t in REPAIR_PROBLEM_KEYS]
 
-    options: List[tuple[str, str]] = []
-    for item in raw_options:
-        if isinstance(item, dict) and item.get("key") and item.get("title"):
-            options.append((str(item["key"]), str(item["title"])))
+    options: List[Dict[str, str]] = []
+    for idx, item in enumerate(raw_options):
+        if isinstance(item, dict):
+            title = str(item.get("title", "")).strip()
+            if not title:
+                continue
+            options.append(
+                {
+                    "key": str(item.get("key", f"p_{idx}")),
+                    "title": title,
+                    "price": str(item.get("price", "")).strip(),
+                    "description": str(item.get("description", "")).strip(),
+                }
+            )
         elif isinstance(item, str):
-            options.append((item, item))
+            options.append({"key": f"p_{idx}", "title": item})
 
-    return options or REPAIR_PROBLEM_KEYS
+    return options or [{"key": k, "title": t} for k, t in REPAIR_PROBLEM_KEYS]
 
 
 def repair_problems_keyboard(
-    problem_options: List[tuple[str, str]], back_callback: str
+    problem_options: List[Dict[str, str]], back_callback: str
 ) -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
     for block in chunks(problem_options, 3):
         rows.append(
-            [InlineKeyboardButton(text=title, callback_data=f"repair_prob_{key}") for key, title in block]
+            [
+                InlineKeyboardButton(
+                    text=item.get("title", "Проблема"),
+                    callback_data=f"repair_prob_{item.get('key', '')}",
+                )
+                for item in block
+            ]
         )
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -422,7 +438,10 @@ async def repair_category_handler(callback: CallbackQuery, state: FSMContext) ->
 
     await state.update_data(repair_device=title)
     problem_options = get_problem_options_for_category(key)
-    await state.update_data(repair_problem_options=problem_options, repair_problem_back="back_repair_categories")
+    await state.update_data(
+        repair_problem_options=problem_options,
+        repair_problem_back="back_repair_categories",
+    )
     await state.set_state(UserStates.repair_choose_problem)
     await callback.message.edit_text(
         "Выберите проблему:",
@@ -444,7 +463,10 @@ async def repair_model_handler(callback: CallbackQuery, state: FSMContext) -> No
     await state.update_data(repair_device=models[idx])
     category_key = data.get("repair_category_key", "")
     problem_options = get_problem_options_for_category(category_key)
-    await state.update_data(repair_problem_options=problem_options, repair_problem_back="back_repair_models")
+    await state.update_data(
+        repair_problem_options=problem_options,
+        repair_problem_back="back_repair_models",
+    )
     await state.set_state(UserStates.repair_choose_problem)
     await callback.message.edit_text(
         "Выберите проблему:",
@@ -456,15 +478,28 @@ async def repair_problem_handler(callback: CallbackQuery, state: FSMContext) -> 
     await callback.answer()
     problem_key = callback.data.replace("repair_prob_", "", 1)
     data = await state.get_data()
-    problem_options = data.get("repair_problem_options", REPAIR_PROBLEM_KEYS)
-    title = next((t for k, t in problem_options if k == problem_key), problem_key)
+    problem_options = data.get("repair_problem_options", [{"key": k, "title": t} for k, t in REPAIR_PROBLEM_KEYS])
+    selected = next(
+        (item for item in problem_options if item.get("key") == problem_key),
+        {"key": problem_key, "title": problem_key},
+    )
+    title = selected.get("title", problem_key)
+    price = selected.get("price", "")
+    inline_description = selected.get("description", "")
     await state.update_data(repair_problem_key=problem_key, repair_problem_title=title)
     get_cfg()
-    text = config.get("repair_problem_texts", {}).get(problem_key, f"{title}\n\nЦену уточним после диагностики.")
-    if isinstance(text, str):
-        text = normalize_text(text)
+    if inline_description:
+        text = normalize_text(inline_description)
+    else:
+        text = config.get("repair_problem_texts", {}).get(
+            problem_key, f"{title}\n\nЦену уточним после диагностики."
+        )
+        if isinstance(text, str):
+            text = normalize_text(text)
+    if price:
+        text = f"{text}\n\n💵 Стоимость: {price}"
 
-    if problem_key == "other":
+    if problem_key == "other" or title.strip().lower() == "другое":
         await state.set_state(UserStates.repair_other_problem)
         await callback.message.edit_text(
             f"{text}\n\n{cfg_text('repair_other_problem_prompt', 'Опишите проблему.')}",
@@ -792,7 +827,10 @@ async def back_repair_models_handler(callback: CallbackQuery, state: FSMContext)
 async def back_repair_problems_handler(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     data = await state.get_data()
-    options = data.get("repair_problem_options", REPAIR_PROBLEM_KEYS)
+    options = data.get(
+        "repair_problem_options",
+        [{"key": k, "title": t} for k, t in REPAIR_PROBLEM_KEYS],
+    )
     back_cb = data.get("repair_problem_back", "back_repair_categories")
     await state.set_state(UserStates.repair_choose_problem)
     await callback.message.edit_text(
@@ -953,7 +991,9 @@ async def admin_edit_problem_category_handler(callback: CallbackQuery, state: FS
 
     await callback.message.edit_text(
         f"Редактирование: Проблемы категории «{category_title}»\n\n"
-        "Отправьте новый JSON-массив одним сообщением.\n\n"
+        "Отправьте новый JSON-массив одним сообщением.\n"
+        "Формат элемента: {\"title\": \"...\", \"price\": \"...\", \"description\": \"...\"}.\n"
+        "Поле key необязательное.\n\n"
         f"Текущее значение:\n{serialized}"
     )
 
