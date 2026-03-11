@@ -1091,14 +1091,18 @@ async def admin_excel_upload_handler(message: Message, state: FSMContext) -> Non
         await message.answer("Нужен файл формата `.xlsx`.")
         return
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_file:
+    final_path = get_services_xlsx_path()
+    target_dir = os.path.dirname(final_path) or "."
+    os.makedirs(target_dir, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile(
+        delete=False, suffix=".xlsx", dir=target_dir
+    ) as tmp_file:
         tmp_path = tmp_file.name
 
     try:
         await message.bot.download(message.document, destination=tmp_path)
         validate_services_workbook(tmp_path)
-        final_path = get_services_xlsx_path()
-        os.makedirs(os.path.dirname(final_path) or ".", exist_ok=True)
         os.replace(tmp_path, final_path)
     except Exception as e:
         if os.path.exists(tmp_path):
