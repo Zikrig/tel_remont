@@ -282,7 +282,7 @@ def get_problem_options_for_category(category_key: str) -> List[Dict[str, str]]:
         by_category = config.get("repair_problems_by_category", {})
         raw_options = by_category.get(category_key)
     if not raw_options:
-        return [{"key": k, "title": t} for k, t in REPAIR_PROBLEM_KEYS]
+        return [{"key": k, "title": t, "_default": "1"} for k, t in REPAIR_PROBLEM_KEYS]
 
     options: List[Dict[str, str]] = []
     for idx, item in enumerate(raw_options):
@@ -296,12 +296,13 @@ def get_problem_options_for_category(category_key: str) -> List[Dict[str, str]]:
                     "title": title,
                     "price": str(item.get("price", "")).strip(),
                     "description": str(item.get("description", "")).strip(),
+                    "_default": "0",
                 }
             )
         elif isinstance(item, str):
-            options.append({"key": f"p_{idx}", "title": item})
+            options.append({"key": f"p_{idx}", "title": item, "_default": "0"})
 
-    return options or [{"key": k, "title": t} for k, t in REPAIR_PROBLEM_KEYS]
+    return options or [{"key": k, "title": t, "_default": "1"} for k, t in REPAIR_PROBLEM_KEYS]
 
 
 def repair_problems_keyboard(
@@ -486,16 +487,19 @@ async def repair_problem_handler(callback: CallbackQuery, state: FSMContext) -> 
     title = selected.get("title", problem_key)
     price = selected.get("price", "")
     inline_description = selected.get("description", "")
+    is_default_problem = selected.get("_default") == "1"
     await state.update_data(repair_problem_key=problem_key, repair_problem_title=title)
     get_cfg()
     if inline_description:
         text = normalize_text(inline_description)
-    else:
+    elif is_default_problem:
         text = config.get("repair_problem_texts", {}).get(
             problem_key, f"{title}\n\nЦену уточним после диагностики."
         )
         if isinstance(text, str):
             text = normalize_text(text)
+    else:
+        text = f"{title}\n\nСтоимость уточним после диагностики."
     if price:
         text = f"{text}\n\n💵 Стоимость: {price}"
 
