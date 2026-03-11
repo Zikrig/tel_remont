@@ -1,0 +1,9 @@
+services:
+  bot:
+    build: .
+    container_name: tel_remont_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./config.json:/app/config.json
