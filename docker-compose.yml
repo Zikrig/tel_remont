@@ -5,5 +5,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      SERVICES_XLSX_PATH: /app/data/services.xlsx
     volumes:
       - ./config.json:/app/config.json
+      - ./data:/app/data

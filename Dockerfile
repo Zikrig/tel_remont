@@ -9,5 +9,6 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY bot.py config.json ./
+RUN mkdir -p /app/data
 
 CMD ["python", "bot.py"]

@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import tempfile
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -13,10 +14,13 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from dotenv import load_dotenv
+from openpyxl import Workbook, load_workbook
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+SERVICES_SHEET_NAME = "services"
+SERVICES_HEADERS = ["Категория", "Модель", "Услуга", "Цена"]
 
 
 def load_config() -> Dict[str, Any]:
@@ -62,13 +66,10 @@ ADMIN_FIELD_LABELS = {
     "ask_contact_text": "Запрос контакта (общий)",
     "offices": "Офисы (JSON-массив строк)",
     "office_addresses": "Адреса офисов (JSON-массив строк)",
-    "repair_categories": "Категории ремонта (JSON-массив объектов key/title)",
-    "repair_models_by_category": "Модели по категориям (JSON-объект key -> массив)",
-    "repair_laptop_models": "Модели ноутбуков (JSON-массив строк)",
-    "repair_problems_by_category_entry": "Проблемы по категориям",
-    "repair_problem_texts": "Описания/цены проблем (JSON-объект)",
     "repair_time_slots": "Слоты времени (JSON-массив строк)",
     "repair_confirmation_template": "Шаблон подтверждения записи",
+    "excel_catalog_download": "Скачать Excel-каталог",
+    "excel_catalog_upload": "Загрузить Excel-каталог",
 }
 
 ADMIN_SECTIONS = {
@@ -91,12 +92,9 @@ ADMIN_FIELDS_BY_SECTION = {
     "json": [
         "offices",
         "office_addresses",
-        "repair_categories",
-        "repair_models_by_category",
-        "repair_laptop_models",
-        "repair_problems_by_category_entry",
-        "repair_problem_texts",
         "repair_time_slots",
+        "excel_catalog_download",
+        "excel_catalog_upload",
     ],
     "templates": [
         "repair_confirmation_template",
@@ -106,10 +104,6 @@ ADMIN_FIELDS_BY_SECTION = {
 ADMIN_JSON_FIELDS = {
     "offices",
     "office_addresses",
-    "repair_categories",
-    "repair_models_by_category",
-    "repair_laptop_models",
-    "repair_problem_texts",
     "repair_time_slots",
 }
 
@@ -133,6 +127,7 @@ class UserStates(StatesGroup):
 
 class AdminEditStates(StatesGroup):
     waiting_new_value = State()
+    waiting_excel_upload = State()
 
 
 def back_keyboard(callback_data: str, text: str = "⬅️ Назад") -> InlineKeyboardMarkup:
@@ -180,8 +175,149 @@ def cfg_text(key: str, default: str) -> str:
     return normalize_text(value)
 
 
+def get_services_xlsx_path() -> str:
+    return os.getenv(
+        "SERVICES_XLSX_PATH", os.path.join(os.path.dirname(__file__), "services.xlsx")
+    )
+
+
 def repair_problem_category_key(category_key: str) -> str:
     return f"repair_problems_{category_key}"
+
+
+def build_legacy_service_rows() -> List[List[str]]:
+    get_cfg()
+    rows: List[List[str]] = []
+    categories = config.get("repair_categories", [])
+    models_by_category = config.get("repair_models_by_category", {})
+
+    for item in categories:
+        if not isinstance(item, dict):
+            continue
+        category_key = str(item.get("key", "")).strip()
+        category_title = str(item.get("title", category_key)).strip()
+        if not category_key or not category_title:
+            continue
+
+        if category_key == "laptops":
+            models = config.get("repair_laptop_models", [])
+        else:
+            models = models_by_category.get(category_key, [])
+
+        raw_services = config.get(repair_problem_category_key(category_key), [])
+        if not raw_services:
+            raw_services = config.get("repair_problems_by_category", {}).get(category_key, [])
+
+        for model in models:
+            model_title = str(model).strip()
+            if not model_title:
+                continue
+            for service in raw_services:
+                if isinstance(service, dict):
+                    service_title = str(service.get("title", "")).strip()
+                    price = str(service.get("price", "")).strip()
+                else:
+                    service_title = str(service).strip()
+                    price = ""
+                if service_title:
+                    rows.append([category_title, model_title, service_title, price])
+
+    return rows
+
+
+def ensure_services_workbook() -> str:
+    path = get_services_xlsx_path()
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    if os.path.exists(path):
+        return path
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = SERVICES_SHEET_NAME
+    sheet.append(SERVICES_HEADERS)
+    for row in build_legacy_service_rows():
+        sheet.append(row)
+    workbook.save(path)
+    return path
+
+
+def validate_services_workbook(path: str) -> List[Dict[str, str]]:
+    workbook = load_workbook(path, data_only=True)
+    if SERVICES_SHEET_NAME not in workbook.sheetnames:
+        raise ValueError(f"В Excel нет листа '{SERVICES_SHEET_NAME}'.")
+
+    sheet = workbook[SERVICES_SHEET_NAME]
+    headers = [str(cell.value).strip() if cell.value is not None else "" for cell in sheet[1]]
+    missing = [header for header in SERVICES_HEADERS if header not in headers]
+    if missing:
+        raise ValueError(f"Не найдены обязательные столбцы: {', '.join(missing)}")
+
+    indexes = {header: headers.index(header) for header in SERVICES_HEADERS}
+    rows: List[Dict[str, str]] = []
+    for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+        values = ["" if value is None else str(value).strip() for value in row]
+        if not any(values):
+            continue
+
+        record = {}
+        for header in SERVICES_HEADERS:
+            index = indexes[header]
+            value = values[index] if index < len(values) else ""
+            record[header] = value
+
+        if not all(record.values()):
+            raise ValueError(
+                f"Строка {row_idx} заполнена не полностью. Нужны значения в колонках: "
+                f"{', '.join(SERVICES_HEADERS)}"
+            )
+        rows.append(record)
+
+    if not rows:
+        raise ValueError("Excel-файл пустой. Добавьте хотя бы одну строку услуги.")
+
+    return rows
+
+
+def load_services_catalog() -> Dict[str, Any]:
+    path = ensure_services_workbook()
+    rows = validate_services_workbook(path)
+
+    categories: List[str] = []
+    models_by_category: Dict[str, List[str]] = {}
+    services_by_pair: Dict[str, List[Dict[str, str]]] = {}
+    seen_services: Dict[tuple[str, str, str], Dict[str, str]] = {}
+    order: List[tuple[str, str, str]] = []
+
+    for row in rows:
+        category = row["Категория"]
+        model = row["Модель"]
+        service = row["Услуга"]
+        price = row["Цена"]
+
+        if category not in categories:
+            categories.append(category)
+        models_by_category.setdefault(category, [])
+        if model not in models_by_category[category]:
+            models_by_category[category].append(model)
+
+        key = (category, model, service)
+        if key not in seen_services:
+            order.append(key)
+        seen_services[key] = {
+            "title": service,
+            "price": price,
+        }
+
+    for category, model, service in order:
+        pair_key = f"{category}|||{model}"
+        services_by_pair.setdefault(pair_key, []).append(seen_services[(category, model, service)])
+
+    return {
+        "categories": categories,
+        "models_by_category": models_by_category,
+        "services_by_pair": services_by_pair,
+        "path": path,
+    }
 
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -247,17 +383,14 @@ def admin_problem_categories_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def repair_categories_keyboard() -> InlineKeyboardMarkup:
-    get_cfg()
-    categories = config.get("repair_categories", [])
-    if not categories:
-        categories = [{"key": "phones", "title": "Смартфоны"}, {"key": "laptops", "title": "Ноутбуки"}]
+def repair_categories_keyboard(categories: List[str]) -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
-    for block in chunks(categories, 3):
+    indexed_categories = list(enumerate(categories))
+    for block in chunks(indexed_categories, 3):
         rows.append(
             [
-                InlineKeyboardButton(text=item["title"], callback_data=f"repair_cat_{item['key']}")
-                for item in block
+                InlineKeyboardButton(text=title, callback_data=f"repair_cat_{idx}")
+                for idx, title in block
             ]
         )
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main_menu")])
@@ -275,48 +408,19 @@ def repair_models_keyboard(models: List[str], back_callback: str = "back_repair_
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def get_problem_options_for_category(category_key: str) -> List[Dict[str, str]]:
-    get_cfg()
-    raw_options = config.get(repair_problem_category_key(category_key))
-    if raw_options is None:
-        by_category = config.get("repair_problems_by_category", {})
-        raw_options = by_category.get(category_key)
-    if not raw_options:
-        return [{"key": k, "title": t, "_default": "1"} for k, t in REPAIR_PROBLEM_KEYS]
-
-    options: List[Dict[str, str]] = []
-    for idx, item in enumerate(raw_options):
-        if isinstance(item, dict):
-            title = str(item.get("title", "")).strip()
-            if not title:
-                continue
-            options.append(
-                {
-                    "key": str(item.get("key", f"p_{idx}")),
-                    "title": title,
-                    "price": str(item.get("price", "")).strip(),
-                    "description": str(item.get("description", "")).strip(),
-                    "_default": "0",
-                }
-            )
-        elif isinstance(item, str):
-            options.append({"key": f"p_{idx}", "title": item, "_default": "0"})
-
-    return options or [{"key": k, "title": t, "_default": "1"} for k, t in REPAIR_PROBLEM_KEYS]
-
-
-def repair_problems_keyboard(
-    problem_options: List[Dict[str, str]], back_callback: str
+def repair_services_keyboard(
+    services: List[Dict[str, str]], back_callback: str
 ) -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
-    for block in chunks(problem_options, 3):
+    indexed_services = list(enumerate(services))
+    for block in chunks(indexed_services, 3):
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=item.get("title", "Проблема"),
-                    callback_data=f"repair_prob_{item.get('key', '')}",
+                    text=item.get("title", "Услуга"),
+                    callback_data=f"repair_service_{idx}",
                 )
-                for item in block
+                for idx, item in block
             ]
         )
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)])
@@ -382,22 +486,6 @@ def parse_date_ru(value: str) -> Optional[datetime]:
         return None
 
 
-def get_models_for_category(category_key: str) -> List[str]:
-    get_cfg()
-    if category_key == "laptops":
-        return config.get("repair_laptop_models", [])
-    models_by_category = config.get("repair_models_by_category", {})
-    return models_by_category.get(category_key, [])
-
-
-def category_title_by_key(category_key: str) -> str:
-    get_cfg()
-    for item in config.get("repair_categories", []):
-        if item.get("key") == category_key:
-            return item.get("title", category_key)
-    return category_key
-
-
 def office_address_by_idx(idx: int) -> str:
     get_cfg()
     addresses = config.get("office_addresses", [])
@@ -414,39 +502,37 @@ async def start_handler(message: Message, state: FSMContext) -> None:
 
 async def menu_repair_handler(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
+    catalog = load_services_catalog()
     await state.set_state(UserStates.repair_choose_category)
+    await state.update_data(repair_catalog=catalog)
     await callback.message.edit_text(
         "Выберите категорию устройства:",
-        reply_markup=repair_categories_keyboard(),
+        reply_markup=repair_categories_keyboard(catalog.get("categories", [])),
     )
 
 
 async def repair_category_handler(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    key = callback.data.replace("repair_cat_", "", 1)
-    title = category_title_by_key(key)
-    await state.update_data(repair_category_key=key, repair_category_title=title)
-
-    models = get_models_for_category(key)
-    if models:
-        await state.update_data(repair_models=models)
-        await state.set_state(UserStates.repair_choose_model)
-        await callback.message.edit_text(
-            "Выберите модель:",
-            reply_markup=repair_models_keyboard(models, "back_repair_categories"),
-        )
+    idx_raw = callback.data.replace("repair_cat_", "", 1)
+    if not idx_raw.isdigit():
+        return
+    idx = int(idx_raw)
+    data = await state.get_data()
+    catalog = data.get("repair_catalog") or load_services_catalog()
+    categories = catalog.get("categories", [])
+    if idx < 0 or idx >= len(categories):
         return
 
-    await state.update_data(repair_device=title)
-    problem_options = get_problem_options_for_category(key)
+    category = categories[idx]
+    models = catalog.get("models_by_category", {}).get(category, [])
     await state.update_data(
-        repair_problem_options=problem_options,
-        repair_problem_back="back_repair_categories",
+        repair_category=category,
+        repair_models=models,
     )
-    await state.set_state(UserStates.repair_choose_problem)
+    await state.set_state(UserStates.repair_choose_model)
     await callback.message.edit_text(
-        "Выберите проблему:",
-        reply_markup=repair_problems_keyboard(problem_options, "back_repair_categories"),
+        "Выберите модель:",
+        reply_markup=repair_models_keyboard(models, "back_repair_categories"),
     )
 
 
@@ -461,56 +547,43 @@ async def repair_model_handler(callback: CallbackQuery, state: FSMContext) -> No
     if idx < 0 or idx >= len(models):
         return
 
-    await state.update_data(repair_device=models[idx])
-    category_key = data.get("repair_category_key", "")
-    problem_options = get_problem_options_for_category(category_key)
+    category = data.get("repair_category", "")
+    model = models[idx]
+    catalog = data.get("repair_catalog") or load_services_catalog()
+    pair_key = f"{category}|||{model}"
+    services = catalog.get("services_by_pair", {}).get(pair_key, [])
+
     await state.update_data(
-        repair_problem_options=problem_options,
-        repair_problem_back="back_repair_models",
+        repair_device=model,
+        repair_services=services,
     )
     await state.set_state(UserStates.repair_choose_problem)
     await callback.message.edit_text(
-        "Выберите проблему:",
-        reply_markup=repair_problems_keyboard(problem_options, "back_repair_models"),
+        "Выберите услугу:",
+        reply_markup=repair_services_keyboard(services, "back_repair_models"),
     )
 
 
 async def repair_problem_handler(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    problem_key = callback.data.replace("repair_prob_", "", 1)
+    idx_raw = callback.data.replace("repair_service_", "", 1)
+    if not idx_raw.isdigit():
+        return
+    idx = int(idx_raw)
     data = await state.get_data()
-    problem_options = data.get("repair_problem_options", [{"key": k, "title": t} for k, t in REPAIR_PROBLEM_KEYS])
-    selected = next(
-        (item for item in problem_options if item.get("key") == problem_key),
-        {"key": problem_key, "title": problem_key},
-    )
-    title = selected.get("title", problem_key)
+    services = data.get("repair_services", [])
+    if idx < 0 or idx >= len(services):
+        return
+    selected = services[idx]
+    title = selected.get("title", "Услуга")
     price = selected.get("price", "")
-    inline_description = selected.get("description", "")
-    is_default_problem = selected.get("_default") == "1"
-    await state.update_data(repair_problem_key=problem_key, repair_problem_title=title)
-    get_cfg()
-    if inline_description:
-        text = normalize_text(inline_description)
-    elif is_default_problem:
-        text = config.get("repair_problem_texts", {}).get(
-            problem_key, f"{title}\n\nЦену уточним после диагностики."
-        )
-        if isinstance(text, str):
-            text = normalize_text(text)
-    else:
-        text = f"{title}\n\nСтоимость уточним после диагностики."
+    text = f"Услуга: {title}"
     if price:
         text = f"{text}\n\n💵 Стоимость: {price}"
+    else:
+        text = f"{text}\n\n💵 Стоимость уточним после диагностики."
 
-    if problem_key == "other" or title.strip().lower() == "другое":
-        await state.set_state(UserStates.repair_other_problem)
-        await callback.message.edit_text(
-            f"{text}\n\n{cfg_text('repair_other_problem_prompt', 'Опишите проблему.')}",
-            reply_markup=back_keyboard("back_repair_problems"),
-        )
-        return
-
+    await state.update_data(repair_service_title=title, repair_service_price=price)
     await state.set_state(UserStates.repair_description)
     await callback.message.edit_text(
         f"{text}\n\n{cfg_text('repair_description_prompt', 'Опишите проблему подробнее.')}",
@@ -519,12 +592,7 @@ async def repair_problem_handler(callback: CallbackQuery, state: FSMContext) -> 
 
 
 async def repair_other_problem_handler(message: Message, state: FSMContext) -> None:
-    await state.update_data(repair_problem_custom=(message.text or "").strip())
-    await state.set_state(UserStates.repair_description)
-    await message.answer(
-        cfg_text("repair_description_prompt", "Опишите проблему подробнее."),
-        reply_markup=back_keyboard("back_repair_problems"),
-    )
+    await repair_description_handler(message, state)
 
 
 async def repair_description_handler(message: Message, state: FSMContext) -> None:
@@ -621,10 +689,10 @@ async def repair_contact_handler(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     date_val = data.get("repair_date", "дата не указана")
     time_val = data.get("repair_time", "время не указано")
-    device_val = data.get("repair_device", data.get("repair_category_title", "устройство"))
-    problem_val = data.get("repair_problem_title", "ремонт")
-    if data.get("repair_problem_key") == "other" and data.get("repair_problem_custom"):
-        problem_val = f"другое: {data.get('repair_problem_custom')}"
+    device_val = data.get("repair_device", "устройство")
+    category_val = data.get("repair_category", "-")
+    service_val = data.get("repair_service_title", "услуга")
+    service_price = data.get("repair_service_price", "")
     office_idx = data.get("repair_office_idx", 0)
     office_name = data.get("repair_office_name", "Офис")
     office_address = office_address_by_idx(office_idx)
@@ -636,16 +704,17 @@ async def repair_contact_handler(message: Message, state: FSMContext) -> None:
     user_text = confirmation_template.format(
         date=date_val,
         time=time_val,
-        problem=problem_val,
+        problem=service_val,
         device=device_val,
         office=office_address,
     )
 
     admin_text = (
         f"{cfg_text('repair_send_to_admin_header', '🛠 Новая запись на ремонт / диагностику')}\n\n"
-        f"Категория: {data.get('repair_category_title', '-')}\n"
+        f"Категория: {category_val}\n"
         f"Модель/устройство: {device_val}\n"
-        f"Проблема: {problem_val}\n"
+        f"Услуга: {service_val}\n"
+        f"Цена: {service_price or 'не указана'}\n"
         f"Описание: {data.get('repair_description', '-')}\n\n"
         f"Офис: {office_name}\n"
         f"Адрес: {office_address}\n"
@@ -807,10 +876,12 @@ async def back_to_main_menu_handler(callback: CallbackQuery, state: FSMContext) 
 
 async def back_repair_categories_handler(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
+    data = await state.get_data()
+    catalog = data.get("repair_catalog") or load_services_catalog()
     await state.set_state(UserStates.repair_choose_category)
     await callback.message.edit_text(
         "Выберите категорию устройства:",
-        reply_markup=repair_categories_keyboard(),
+        reply_markup=repair_categories_keyboard(catalog.get("categories", [])),
     )
 
 
@@ -831,15 +902,11 @@ async def back_repair_models_handler(callback: CallbackQuery, state: FSMContext)
 async def back_repair_problems_handler(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     data = await state.get_data()
-    options = data.get(
-        "repair_problem_options",
-        [{"key": k, "title": t} for k, t in REPAIR_PROBLEM_KEYS],
-    )
-    back_cb = data.get("repair_problem_back", "back_repair_categories")
+    services = data.get("repair_services", [])
     await state.set_state(UserStates.repair_choose_problem)
     await callback.message.edit_text(
-        "Выберите проблему:",
-        reply_markup=repair_problems_keyboard(options, back_cb),
+        "Выберите услугу:",
+        reply_markup=repair_services_keyboard(services, "back_repair_models"),
     )
 
 
@@ -950,11 +1017,24 @@ async def admin_edit_button_handler(callback: CallbackQuery, state: FSMContext) 
     if field_key not in ADMIN_FIELD_LABELS:
         await callback.message.answer("Неизвестный параметр.")
         return
-    if field_key == "repair_problems_by_category_entry":
+    if field_key == "excel_catalog_download":
+        path = ensure_services_workbook()
+        await callback.message.answer_document(
+            FSInputFile(path),
+            caption="Актуальный Excel-каталог услуг.",
+        )
+        await callback.message.answer(
+            "Действия с Excel-каталогом:",
+            reply_markup=admin_section_keyboard("json"),
+        )
         await state.clear()
+        return
+    if field_key == "excel_catalog_upload":
+        await state.set_state(AdminEditStates.waiting_excel_upload)
         await callback.message.edit_text(
-            "Проблемы по категориям. Выберите категорию:",
-            reply_markup=admin_problem_categories_keyboard(),
+            "Пришлите новый Excel-файл `.xlsx` с листом `services` и колонками: "
+            "Категория, Модель, Услуга, Цена.",
+            reply_markup=back_keyboard("admin_section_json"),
         )
         return
 
@@ -974,34 +1054,6 @@ async def admin_edit_button_handler(callback: CallbackQuery, state: FSMContext) 
     )
 
 
-async def admin_edit_problem_category_handler(callback: CallbackQuery, state: FSMContext) -> None:
-    if not is_admin(callback.from_user.id):
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-    await callback.answer()
-
-    category_key = callback.data.replace("admin_edit_problem_cat_", "", 1)
-    category_title = category_title_by_key(category_key)
-
-    get_cfg()
-    current_value = config.get(repair_problem_category_key(category_key))
-    if current_value is None:
-        by_category = config.get("repair_problems_by_category", {})
-        current_value = by_category.get(category_key, [])
-    serialized = json.dumps(current_value, ensure_ascii=False, indent=2)
-
-    await state.set_state(AdminEditStates.waiting_new_value)
-    await state.update_data(edit_field=f"repair_problems_by_category:{category_key}")
-
-    await callback.message.edit_text(
-        f"Редактирование: Проблемы категории «{category_title}»\n\n"
-        "Отправьте новый JSON-массив одним сообщением.\n"
-        "Формат элемента: {\"title\": \"...\", \"price\": \"...\", \"description\": \"...\"}.\n"
-        "Поле key необязательное.\n\n"
-        f"Текущее значение:\n{serialized}"
-    )
-
-
 async def admin_new_value_handler(message: Message, state: FSMContext) -> None:
     if not is_admin(message.from_user.id):
         return
@@ -1014,21 +1066,6 @@ async def admin_new_value_handler(message: Message, state: FSMContext) -> None:
         return
     get_cfg()
     raw = message.text or ""
-    if field_key.startswith("repair_problems_by_category:"):
-        category_key = field_key.split(":", 1)[1]
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            await message.answer("Ошибка JSON. Проверьте формат и отправьте снова.")
-            return
-        if not isinstance(parsed, list):
-            await message.answer("Нужен JSON-массив для выбранной категории.")
-            return
-        config[repair_problem_category_key(category_key)] = parsed
-        save_config(config)
-        await state.clear()
-        await message.answer("Сохранено.", reply_markup=admin_problem_categories_keyboard())
-        return
     if field_key in ADMIN_JSON_FIELDS:
         try:
             parsed = json.loads(raw)
@@ -1041,6 +1078,42 @@ async def admin_new_value_handler(message: Message, state: FSMContext) -> None:
     save_config(config)
     await state.clear()
     await message.answer("Сохранено.", reply_markup=admin_menu_keyboard())
+
+
+async def admin_excel_upload_handler(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    if not message.document:
+        await message.answer("Пришлите именно Excel-файл `.xlsx`.")
+        return
+    filename = message.document.file_name or ""
+    if not filename.lower().endswith(".xlsx"):
+        await message.answer("Нужен файл формата `.xlsx`.")
+        return
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_file:
+        tmp_path = tmp_file.name
+
+    try:
+        await message.bot.download(message.document, destination=tmp_path)
+        validate_services_workbook(tmp_path)
+        final_path = get_services_xlsx_path()
+        os.makedirs(os.path.dirname(final_path) or ".", exist_ok=True)
+        os.replace(tmp_path, final_path)
+    except Exception as e:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        await message.answer(
+            f"Не удалось загрузить Excel-каталог: {e}",
+            reply_markup=admin_section_keyboard("json"),
+        )
+        return
+
+    await state.clear()
+    await message.answer(
+        "Excel-каталог успешно обновлён.",
+        reply_markup=admin_section_keyboard("json"),
+    )
 
 
 async def main() -> None:
@@ -1067,7 +1140,7 @@ async def main() -> None:
 
     dp.callback_query.register(repair_category_handler, F.data.startswith("repair_cat_"))
     dp.callback_query.register(repair_model_handler, F.data.startswith("repair_model_"))
-    dp.callback_query.register(repair_problem_handler, F.data.startswith("repair_prob_"))
+    dp.callback_query.register(repair_problem_handler, F.data.startswith("repair_service_"))
     dp.message.register(repair_other_problem_handler, UserStates.repair_other_problem)
     dp.message.register(repair_description_handler, UserStates.repair_description)
     dp.callback_query.register(repair_office_handler, F.data.startswith("repair_office_"))
@@ -1094,11 +1167,9 @@ async def main() -> None:
 
     dp.callback_query.register(admin_root_handler, F.data == "admin_root")
     dp.callback_query.register(admin_section_handler, F.data.startswith("admin_section_"))
-    dp.callback_query.register(
-        admin_edit_problem_category_handler, F.data.startswith("admin_edit_problem_cat_")
-    )
     dp.callback_query.register(admin_edit_button_handler, F.data.startswith("admin_edit_"))
     dp.message.register(admin_new_value_handler, AdminEditStates.waiting_new_value)
+    dp.message.register(admin_excel_upload_handler, AdminEditStates.waiting_excel_upload)
 
     await dp.start_polling(bot)
 
