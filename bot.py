@@ -487,7 +487,10 @@ async def repair_contact_handler(message: Message, state: FSMContext) -> None:
     )
     await send_to_admin(message.bot, admin_text)
     await state.clear()
-    await message.answer(f"{user_text}\n\nГлавное меню:", reply_markup=main_menu_keyboard())
+    await message.answer(
+        f"{user_text}\n\nКонтакт для связи получили. Главное меню:",
+        reply_markup=main_menu_keyboard(),
+    )
 
 
 async def menu_hydro_handler(callback: CallbackQuery) -> None:
@@ -570,7 +573,11 @@ async def handle_device_contact(message: Message, state: FSMContext) -> None:
     admin_text += f"Контакт для связи: {contact}"
     await send_to_admin(message.bot, admin_text)
     await state.clear()
-    await message.answer("Спасибо! Мы получили запрос и свяжемся с вами.", reply_markup=main_menu_keyboard())
+    await message.answer(
+        "Спасибо! Контакт получили, передали запрос администратору. "
+        "Скоро свяжемся с вами.",
+        reply_markup=main_menu_keyboard(),
+    )
 
 
 async def handle_yes_no_available(callback: CallbackQuery, state: FSMContext) -> None:
