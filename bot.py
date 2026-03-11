@@ -587,7 +587,8 @@ async def handle_yes_no_available(callback: CallbackQuery, state: FSMContext) ->
         )
         await send_to_admin(callback.bot, admin_text)
         await state.clear()
-        await callback.message.edit_text(
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(
             "Спасибо! Мы получили запрос и свяжемся с вами по указанному номеру.",
             reply_markup=main_menu_keyboard(),
         )
