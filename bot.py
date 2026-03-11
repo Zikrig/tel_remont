@@ -51,7 +51,7 @@ REPAIR_PROBLEM_KEYS = [
     ("other", "Другое"),
 ]
 
-ADMIN_EDITABLE_FIELDS = {
+ADMIN_FIELD_LABELS = {
     "welcome_text": "Приветствие",
     "menu_text": "Текст перед выбором услуги",
     "hydro_text": "Текст «Гидрогелевая плёнка»",
@@ -65,9 +65,42 @@ ADMIN_EDITABLE_FIELDS = {
     "repair_categories": "Категории ремонта (JSON-массив объектов key/title)",
     "repair_models_by_category": "Модели по категориям (JSON-объект key -> массив)",
     "repair_laptop_models": "Модели ноутбуков (JSON-массив строк)",
+    "repair_problems_by_category": "Проблемы по категориям (JSON-объект key -> массив key/title)",
     "repair_problem_texts": "Описания/цены проблем (JSON-объект)",
     "repair_time_slots": "Слоты времени (JSON-массив строк)",
     "repair_confirmation_template": "Шаблон подтверждения записи",
+}
+
+ADMIN_SECTIONS = {
+    "texts": "Тексты",
+    "json": "Json",
+    "templates": "Шаблоны",
+}
+
+ADMIN_FIELDS_BY_SECTION = {
+    "texts": [
+        "welcome_text",
+        "menu_text",
+        "hydro_text",
+        "price_text",
+        "warranty_text",
+        "device_in_service_prompt",
+        "device_in_service_phone_question",
+        "ask_contact_text",
+    ],
+    "json": [
+        "offices",
+        "office_addresses",
+        "repair_categories",
+        "repair_models_by_category",
+        "repair_laptop_models",
+        "repair_problems_by_category",
+        "repair_problem_texts",
+        "repair_time_slots",
+    ],
+    "templates": [
+        "repair_confirmation_template",
+    ],
 }
 
 ADMIN_JSON_FIELDS = {
@@ -76,6 +109,7 @@ ADMIN_JSON_FIELDS = {
     "repair_categories",
     "repair_models_by_category",
     "repair_laptop_models",
+    "repair_problems_by_category",
     "repair_problem_texts",
     "repair_time_slots",
 }
@@ -166,9 +200,20 @@ def yes_no_keyboard() -> InlineKeyboardMarkup:
 
 def admin_menu_keyboard() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=label, callback_data=f"admin_edit_{field}")]
-        for field, label in ADMIN_EDITABLE_FIELDS.items()
+        [InlineKeyboardButton(text=label, callback_data=f"admin_section_{key}")]
+        for key, label in ADMIN_SECTIONS.items()
     ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_section_keyboard(section_key: str) -> InlineKeyboardMarkup:
+    field_keys = ADMIN_FIELDS_BY_SECTION.get(section_key, [])
+    rows = [
+        [InlineKeyboardButton(text=ADMIN_FIELD_LABELS[field], callback_data=f"admin_edit_{field}")]
+        for field in field_keys
+        if field in ADMIN_FIELD_LABELS
+    ]
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -198,9 +243,26 @@ def repair_models_keyboard(models: List[str]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def repair_problems_keyboard() -> InlineKeyboardMarkup:
+def get_problem_options_for_category(category_key: str) -> List[tuple[str, str]]:
+    get_cfg()
+    by_category = config.get("repair_problems_by_category", {})
+    raw_options = by_category.get(category_key)
+    if not raw_options:
+        return REPAIR_PROBLEM_KEYS
+
+    options: List[tuple[str, str]] = []
+    for item in raw_options:
+        if isinstance(item, dict) and item.get("key") and item.get("title"):
+            options.append((str(item["key"]), str(item["title"])))
+        elif isinstance(item, str):
+            options.append((item, item))
+
+    return options or REPAIR_PROBLEM_KEYS
+
+
+def repair_problems_keyboard(problem_options: List[tuple[str, str]]) -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
-    for block in chunks(REPAIR_PROBLEM_KEYS, 3):
+    for block in chunks(problem_options, 3):
         rows.append(
             [InlineKeyboardButton(text=title, callback_data=f"repair_prob_{key}") for key, title in block]
         )
@@ -318,10 +380,12 @@ async def repair_category_handler(callback: CallbackQuery, state: FSMContext) ->
         return
 
     await state.update_data(repair_device=title)
+    problem_options = get_problem_options_for_category(key)
+    await state.update_data(repair_problem_options=problem_options)
     await state.set_state(UserStates.repair_choose_problem)
     await callback.message.edit_text(
         "Выберите проблему:",
-        reply_markup=repair_problems_keyboard(),
+        reply_markup=repair_problems_keyboard(problem_options),
     )
 
 
@@ -337,17 +401,22 @@ async def repair_model_handler(callback: CallbackQuery, state: FSMContext) -> No
         return
 
     await state.update_data(repair_device=models[idx])
+    category_key = data.get("repair_category_key", "")
+    problem_options = get_problem_options_for_category(category_key)
+    await state.update_data(repair_problem_options=problem_options)
     await state.set_state(UserStates.repair_choose_problem)
     await callback.message.edit_text(
         "Выберите проблему:",
-        reply_markup=repair_problems_keyboard(),
+        reply_markup=repair_problems_keyboard(problem_options),
     )
 
 
 async def repair_problem_handler(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     problem_key = callback.data.replace("repair_prob_", "", 1)
-    title = next((t for k, t in REPAIR_PROBLEM_KEYS if k == problem_key), problem_key)
+    data = await state.get_data()
+    problem_options = data.get("repair_problem_options", REPAIR_PROBLEM_KEYS)
+    title = next((t for k, t in problem_options if k == problem_key), problem_key)
     await state.update_data(repair_problem_key=problem_key, repair_problem_title=title)
     get_cfg()
     text = config.get("repair_problem_texts", {}).get(problem_key, f"{title}\n\nЦену уточним после диагностики.")
@@ -633,8 +702,34 @@ async def admin_command_handler(message: Message) -> None:
     if not is_admin(message.from_user.id):
         return
     await message.answer(
-        "Админ-меню. Выберите параметр для редактирования.",
+        "Админ-меню. Выберите категорию:",
         reply_markup=admin_menu_keyboard(),
+    )
+
+
+async def admin_root_handler(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.answer()
+    await callback.message.edit_text(
+        "Админ-меню. Выберите категорию:",
+        reply_markup=admin_menu_keyboard(),
+    )
+
+
+async def admin_section_handler(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.answer()
+    section_key = callback.data.replace("admin_section_", "", 1)
+    if section_key not in ADMIN_FIELDS_BY_SECTION:
+        await callback.message.answer("Неизвестный раздел.")
+        return
+    await callback.message.edit_text(
+        f"Категория: {ADMIN_SECTIONS.get(section_key, section_key)}\n\nВыберите параметр для редактирования:",
+        reply_markup=admin_section_keyboard(section_key),
     )
 
 
@@ -644,7 +739,7 @@ async def admin_edit_button_handler(callback: CallbackQuery, state: FSMContext) 
         return
     await callback.answer()
     field_key = callback.data.replace("admin_edit_", "", 1)
-    if field_key not in ADMIN_EDITABLE_FIELDS:
+    if field_key not in ADMIN_FIELD_LABELS:
         await callback.message.answer("Неизвестный параметр.")
         return
 
@@ -660,7 +755,7 @@ async def admin_edit_button_handler(callback: CallbackQuery, state: FSMContext) 
         hint = cfg_text("texts_edit_hint", "Отправьте новый текст одним сообщением.")
 
     await callback.message.edit_text(
-        f"Редактирование: {ADMIN_EDITABLE_FIELDS[field_key]}\n\n{hint}\n\nТекущее значение:\n{serialized}"
+        f"Редактирование: {ADMIN_FIELD_LABELS[field_key]}\n\n{hint}\n\nТекущее значение:\n{serialized}"
     )
 
 
@@ -728,6 +823,8 @@ async def main() -> None:
     dp.message.register(handle_device_contact, UserStates.waiting_contact_for_device)
     dp.callback_query.register(handle_yes_no_available, F.data.in_(["yes_available", "no_available"]))
 
+    dp.callback_query.register(admin_root_handler, F.data == "admin_root")
+    dp.callback_query.register(admin_section_handler, F.data.startswith("admin_section_"))
     dp.callback_query.register(admin_edit_button_handler, F.data.startswith("admin_edit_"))
     dp.message.register(admin_new_value_handler, AdminEditStates.waiting_new_value)
 

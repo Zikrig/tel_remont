@@ -83,6 +83,94 @@
     "lg": ["LG"],
     "headphones": ["AirPods", "Samsung Buds", "Другое"]
   },
+  "repair_problems_by_category": {
+    "apple": [
+      {"key": "screen", "title": "Экран"},
+      {"key": "battery", "title": "Аккумулятор"},
+      {"key": "no_power", "title": "Не включается"},
+      {"key": "firmware", "title": "Прошивка"},
+      {"key": "water_damage", "title": "После влаги"},
+      {"key": "other", "title": "Другое"}
+    ],
+    "samsung": [
+      {"key": "screen", "title": "Экран"},
+      {"key": "battery", "title": "Аккумулятор"},
+      {"key": "no_power", "title": "Не включается"},
+      {"key": "firmware", "title": "Прошивка"},
+      {"key": "water_damage", "title": "После влаги"},
+      {"key": "other", "title": "Другое"}
+    ],
+    "huawei_honor": [
+      {"key": "screen", "title": "Экран"},
+      {"key": "battery", "title": "Аккумулятор"},
+      {"key": "no_power", "title": "Не включается"},
+      {"key": "firmware", "title": "Прошивка"},
+      {"key": "water_damage", "title": "После влаги"},
+      {"key": "other", "title": "Другое"}
+    ],
+    "xiaomi": [
+      {"key": "screen", "title": "Экран"},
+      {"key": "battery", "title": "Аккумулятор"},
+      {"key": "no_power", "title": "Не включается"},
+      {"key": "firmware", "title": "Прошивка"},
+      {"key": "water_damage", "title": "После влаги"},
+      {"key": "other", "title": "Другое"}
+    ],
+    "meizu": [
+      {"key": "screen", "title": "Экран"},
+      {"key": "battery", "title": "Аккумулятор"},
+      {"key": "no_power", "title": "Не включается"},
+      {"key": "other", "title": "Другое"}
+    ],
+    "nokia": [
+      {"key": "screen", "title": "Экран"},
+      {"key": "battery", "title": "Аккумулятор"},
+      {"key": "no_power", "title": "Не включается"},
+      {"key": "other", "title": "Другое"}
+    ],
+    "asus": [
+      {"key": "screen", "title": "Экран"},
+      {"key": "battery", "title": "Аккумулятор"},
+      {"key": "no_power", "title": "Не включается"},
+      {"key": "other", "title": "Другое"}
+    ],
+    "zte": [
+      {"key": "screen", "title": "Экран"},
+      {"key": "battery", "title": "Аккумулятор"},
+      {"key": "no_power", "title": "Не включается"},
+      {"key": "other", "title": "Другое"}
+    ],
+    "lenovo": [
+      {"key": "screen", "title": "Экран"},
+      {"key": "battery", "title": "Аккумулятор"},
+      {"key": "no_power", "title": "Не включается"},
+      {"key": "other", "title": "Другое"}
+    ],
+    "lg": [
+      {"key": "screen", "title": "Экран"},
+      {"key": "battery", "title": "Аккумулятор"},
+      {"key": "no_power", "title": "Не включается"},
+      {"key": "other", "title": "Другое"}
+    ],
+    "headphones": [
+      {"key": "battery", "title": "Аккумулятор"},
+      {"key": "no_power", "title": "Не включается"},
+      {"key": "firmware", "title": "Прошивка"},
+      {"key": "water_damage", "title": "После влаги"},
+      {"key": "other", "title": "Другое"}
+    ],
+    "laptops": [
+      {"key": "screen", "title": "Экран"},
+      {"key": "battery", "title": "Аккумулятор"},
+      {"key": "no_power", "title": "Не включается"},
+      {"key": "cleaning", "title": "Чистка"},
+      {"key": "upgrade", "title": "Увеличение"},
+      {"key": "keyboard", "title": "Клавиатура"},
+      {"key": "firmware", "title": "Прошивка"},
+      {"key": "water_damage", "title": "После влаги"},
+      {"key": "other", "title": "Другое"}
+    ]
+  },
   "repair_problem_texts": {
     "screen": "🔧 Экран\\n\\nЗамена или ремонт дисплея, сенсора, стекла.\\nОриентировочная стоимость зависит от модели устройства. Точную цену назовём после диагностики в сервисе.",
     "battery": "🔋 Аккумулятор\\n\\nЗамена аккумуляторной батареи с гарантией.\\nОриентировочная стоимость зависит от модели устройства. Точную цену назовём после диагностики в сервисе.",
