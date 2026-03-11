@@ -123,6 +123,19 @@ def chunks(lst: List[Any], n: int) -> List[List[Any]]:
     return [lst[i : i + n] for i in range(0, len(lst), n)]
 
 
+def normalize_text(value: str) -> str:
+    # Allow admins to enter \n in config and get real line breaks in messages.
+    return value.replace("\\n", "\n")
+
+
+def cfg_text(key: str, default: str) -> str:
+    get_cfg()
+    value = config.get(key, default)
+    if not isinstance(value, str):
+        return default
+    return normalize_text(value)
+
+
 def main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -265,8 +278,7 @@ def office_address_by_idx(idx: int) -> str:
 
 async def start_handler(message: Message, state: FSMContext) -> None:
     await state.clear()
-    get_cfg()
-    await message.answer(config.get("welcome_text", "Здравствуйте!"), reply_markup=main_menu_keyboard())
+    await message.answer(cfg_text("welcome_text", "Здравствуйте!"), reply_markup=main_menu_keyboard())
 
 
 async def menu_repair_handler(callback: CallbackQuery, state: FSMContext) -> None:
@@ -328,33 +340,33 @@ async def repair_problem_handler(callback: CallbackQuery, state: FSMContext) -> 
     await state.update_data(repair_problem_key=problem_key, repair_problem_title=title)
     get_cfg()
     text = config.get("repair_problem_texts", {}).get(problem_key, f"{title}\n\nЦену уточним после диагностики.")
+    if isinstance(text, str):
+        text = normalize_text(text)
 
     if problem_key == "other":
         await state.set_state(UserStates.repair_other_problem)
         await callback.message.edit_text(
-            f"{text}\n\n{config.get('repair_other_problem_prompt', 'Опишите проблему.')}"
+            f"{text}\n\n{cfg_text('repair_other_problem_prompt', 'Опишите проблему.')}"
         )
         return
 
     await state.set_state(UserStates.repair_description)
     await callback.message.edit_text(
-        f"{text}\n\n{config.get('repair_description_prompt', 'Опишите проблему подробнее.')}"
+        f"{text}\n\n{cfg_text('repair_description_prompt', 'Опишите проблему подробнее.')}"
     )
 
 
 async def repair_other_problem_handler(message: Message, state: FSMContext) -> None:
     await state.update_data(repair_problem_custom=(message.text or "").strip())
-    get_cfg()
     await state.set_state(UserStates.repair_description)
-    await message.answer(config.get("repair_description_prompt", "Опишите проблему подробнее."))
+    await message.answer(cfg_text("repair_description_prompt", "Опишите проблему подробнее."))
 
 
 async def repair_description_handler(message: Message, state: FSMContext) -> None:
     await state.update_data(repair_description=(message.text or "").strip())
-    get_cfg()
     await state.set_state(UserStates.repair_choose_office)
     await message.answer(
-        config.get("repair_choose_office_text", "Выберите офис:"),
+        cfg_text("repair_choose_office_text", "Выберите офис:"),
         reply_markup=offices_keyboard("repair_office"),
     )
 
@@ -365,38 +377,35 @@ async def repair_office_handler(callback: CallbackQuery, state: FSMContext) -> N
     if not idx_raw.isdigit():
         return
     idx = int(idx_raw)
-    get_cfg()
     offices = config.get("offices", [])
     if idx < 0 or idx >= len(offices):
         return
     await state.update_data(repair_office_idx=idx, repair_office_name=offices[idx])
     await state.set_state(UserStates.repair_choose_day)
     await callback.message.edit_text(
-        config.get("repair_choose_day_text", "Выберите день записи:"),
+        cfg_text("repair_choose_day_text", "Выберите день записи:"),
         reply_markup=repair_day_keyboard(),
     )
 
 
 async def repair_day_handler(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    get_cfg()
     if callback.data == "repair_day_tomorrow":
         date_str = (datetime.now() + timedelta(days=1)).strftime("%d.%m.%Y")
         await state.update_data(repair_date=date_str)
         await state.set_state(UserStates.repair_choose_time)
         await callback.message.edit_text(
-            config.get("repair_choose_time_text", "Выберите время:"),
+            cfg_text("repair_choose_time_text", "Выберите время:"),
             reply_markup=repair_time_keyboard(),
         )
         return
     await state.set_state(UserStates.repair_enter_date)
     await callback.message.edit_text(
-        config.get("repair_enter_date_text", "Введите дату ДД.ММ.ГГГГ")
+        cfg_text("repair_enter_date_text", "Введите дату ДД.ММ.ГГГГ")
     )
 
 
 async def repair_date_input_handler(message: Message, state: FSMContext) -> None:
-    get_cfg()
     date_raw = (message.text or "").strip()
     dt = parse_date_ru(date_raw)
     if dt is None:
@@ -405,16 +414,15 @@ async def repair_date_input_handler(message: Message, state: FSMContext) -> None
     await state.update_data(repair_date=date_raw)
     await state.set_state(UserStates.repair_choose_time)
     await message.answer(
-        config.get("repair_choose_time_text", "Выберите время:"),
+        cfg_text("repair_choose_time_text", "Выберите время:"),
         reply_markup=repair_time_keyboard(),
     )
 
 
 async def repair_time_handler(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    get_cfg()
     slots = config.get("repair_time_slots", [])
-    any_time = config.get("repair_any_time_text", "Приду в течение дня")
+    any_time = cfg_text("repair_any_time_text", "Приду в течение дня")
     if callback.data == "repair_time_any":
         picked = any_time
     else:
@@ -427,14 +435,13 @@ async def repair_time_handler(callback: CallbackQuery, state: FSMContext) -> Non
         picked = slots[idx]
     await state.update_data(repair_time=picked)
     await state.set_state(UserStates.repair_ask_name)
-    await callback.message.edit_text(config.get("repair_ask_name_text", "Как вас зовут?"))
+    await callback.message.edit_text(cfg_text("repair_ask_name_text", "Как вас зовут?"))
 
 
 async def repair_name_handler(message: Message, state: FSMContext) -> None:
     await state.update_data(repair_name=(message.text or "").strip())
-    get_cfg()
     await state.set_state(UserStates.repair_ask_contact)
-    await message.answer(config.get("repair_ask_contact_text", "Укажите телефон или @username"))
+    await message.answer(cfg_text("repair_ask_contact_text", "Укажите телефон или @username"))
 
 
 async def repair_contact_handler(message: Message, state: FSMContext) -> None:
@@ -451,7 +458,7 @@ async def repair_contact_handler(message: Message, state: FSMContext) -> None:
     office_name = data.get("repair_office_name", "Офис")
     office_address = office_address_by_idx(office_idx)
 
-    confirmation_template = config.get(
+    confirmation_template = cfg_text(
         "repair_confirmation_template",
         "Ок, записал вас на {date} в {time} на {problem} для устройства {device}.\n\nЖдём вас по адресу: {office}",
     )
@@ -464,7 +471,7 @@ async def repair_contact_handler(message: Message, state: FSMContext) -> None:
     )
 
     admin_text = (
-        f"{config.get('repair_send_to_admin_header', '🛠 Новая запись на ремонт / диагностику')}\n\n"
+        f"{cfg_text('repair_send_to_admin_header', '🛠 Новая запись на ремонт / диагностику')}\n\n"
         f"Категория: {data.get('repair_category_title', '-')}\n"
         f"Модель/устройство: {device_val}\n"
         f"Проблема: {problem_val}\n"
@@ -485,27 +492,24 @@ async def repair_contact_handler(message: Message, state: FSMContext) -> None:
 
 async def menu_hydro_handler(callback: CallbackQuery) -> None:
     await callback.answer()
-    get_cfg()
     await callback.message.edit_text(
-        config.get("hydro_text", "Информация о гидрогелевой плёнке."),
+        cfg_text("hydro_text", "Информация о гидрогелевой плёнке."),
         reply_markup=main_menu_keyboard(),
     )
 
 
 async def menu_price_handler(callback: CallbackQuery) -> None:
     await callback.answer()
-    get_cfg()
     await callback.message.edit_text(
-        config.get("price_text", "Информация о стоимости защиты и аксессуаров."),
+        cfg_text("price_text", "Информация о стоимости защиты и аксессуаров."),
         reply_markup=main_menu_keyboard(),
     )
 
 
 async def menu_warranty_handler(callback: CallbackQuery) -> None:
     await callback.answer()
-    get_cfg()
     await callback.message.edit_text(
-        config.get("warranty_text", "Информация по гарантии."),
+        cfg_text("warranty_text", "Информация по гарантии."),
         reply_markup=main_menu_keyboard(),
     )
 
@@ -525,33 +529,28 @@ async def device_office_handler(callback: CallbackQuery, state: FSMContext) -> N
     if not idx_raw.isdigit():
         return
     idx = int(idx_raw)
-    get_cfg()
     offices = config.get("offices", [])
     office_name = offices[idx] if 0 <= idx < len(offices) else "Неизвестный офис"
     await state.update_data(chosen_office=office_name)
     await state.set_state(UserStates.waiting_device_info)
     await callback.message.edit_text(
-        config.get(
-            "device_in_service_prompt",
-            "Напишите номер заказа или телефон, указанный в заказе.",
-        )
+        cfg_text("device_in_service_prompt", "Напишите номер заказа или телефон, указанный в заказе.")
     )
 
 
 async def handle_device_info(message: Message, state: FSMContext) -> None:
-    get_cfg()
     value = (message.text or "").strip()
     await state.update_data(device_raw_input=value)
     if is_phone_number(value):
         await state.update_data(device_phone=value)
         await message.answer(
-            config.get("device_in_service_phone_question", "Вы сейчас доступны по этому номеру телефона?"),
+            cfg_text("device_in_service_phone_question", "Вы сейчас доступны по этому номеру телефона?"),
             reply_markup=yes_no_keyboard(),
         )
         return
     await state.update_data(device_order=value if is_order_number(value) else None)
     await state.set_state(UserStates.waiting_contact_for_device)
-    await message.answer(config.get("ask_contact_text", "Пожалуйста, отправьте телефон или @username"))
+    await message.answer(cfg_text("ask_contact_text", "Пожалуйста, отправьте телефон или @username"))
 
 
 async def handle_device_contact(message: Message, state: FSMContext) -> None:
@@ -576,7 +575,6 @@ async def handle_device_contact(message: Message, state: FSMContext) -> None:
 
 async def handle_yes_no_available(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    get_cfg()
     data = await state.get_data()
     if callback.data == "yes_available":
         admin_text = (
@@ -595,7 +593,7 @@ async def handle_yes_no_available(callback: CallbackQuery, state: FSMContext) ->
         )
         return
     await state.set_state(UserStates.waiting_contact_for_device)
-    await callback.message.edit_text(config.get("ask_contact_text", "Пожалуйста, отправьте телефон или @username"))
+    await callback.message.edit_text(cfg_text("ask_contact_text", "Пожалуйста, отправьте телефон или @username"))
 
 
 async def admin_command_handler(message: Message) -> None:
@@ -626,7 +624,7 @@ async def admin_edit_button_handler(callback: CallbackQuery, state: FSMContext) 
         hint = "Отправьте новый JSON одним сообщением."
     else:
         serialized = str(current_value or "")
-        hint = config.get("texts_edit_hint", "Отправьте новый текст одним сообщением.")
+        hint = cfg_text("texts_edit_hint", "Отправьте новый текст одним сообщением.")
 
     await callback.message.edit_text(
         f"Редактирование: {ADMIN_EDITABLE_FIELDS[field_key]}\n\n{hint}\n\nТекущее значение:\n{serialized}"
