@@ -6,7 +6,9 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -109,7 +111,10 @@ def get_admin_ids() -> List[int]:
         value = part.strip()
         if not value:
             continue
-        result.append(int(value))
+        try:
+            result.append(int(value))
+        except ValueError:
+            print(f"[WARN] ADMIN_IDS contains invalid value: {value}")
     if not result:
         raise RuntimeError("ADMIN_IDS does not contain valid IDs")
     return result
@@ -231,9 +236,15 @@ def repair_time_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def send_to_admin(bot: Bot, text: str) -> None:
+async def send_to_admin(bot: Bot, text: str) -> bool:
+    delivered = False
     for admin_id in get_admin_ids():
-        await bot.send_message(chat_id=admin_id, text=text)
+        try:
+            await bot.send_message(chat_id=admin_id, text=text)
+            delivered = True
+        except TelegramBadRequest as e:
+            print(f"[WARN] Failed to send to admin {admin_id}: {e}")
+    return delivered
 
 
 def is_phone_number(value: str) -> bool:
@@ -485,10 +496,15 @@ async def repair_contact_handler(message: Message, state: FSMContext) -> None:
         f"TG user: {message.from_user.full_name} (@{message.from_user.username})\n"
         f"ID: {message.from_user.id}"
     )
-    await send_to_admin(message.bot, admin_text)
+    delivered = await send_to_admin(message.bot, admin_text)
     await state.clear()
     await message.answer(
-        f"{user_text}\n\nКонтакт для связи получили. Главное меню:",
+        f"{user_text}\n\n"
+        + (
+            "Контакт для связи получили. Главное меню:"
+            if delivered
+            else "Контакт получили, но не смогли отправить заявку администратору. Проверьте список ADMIN_IDS."
+        ),
         reply_markup=main_menu_keyboard(),
     )
 
@@ -571,11 +587,15 @@ async def handle_device_contact(message: Message, state: FSMContext) -> None:
     if data.get("device_phone"):
         admin_text += f"Распознанный номер телефона из заказа: {data.get('device_phone')}\n"
     admin_text += f"Контакт для связи: {contact}"
-    await send_to_admin(message.bot, admin_text)
+    delivered = await send_to_admin(message.bot, admin_text)
     await state.clear()
     await message.answer(
-        "Спасибо! Контакт получили, передали запрос администратору. "
-        "Скоро свяжемся с вами.",
+        (
+            "Спасибо! Контакт получили, передали запрос администратору. Скоро свяжемся с вами."
+            if delivered
+            else "Контакт получили, но не удалось передать запрос администратору. "
+            "Пожалуйста, проверьте корректность ADMIN_IDS."
+        ),
         reply_markup=main_menu_keyboard(),
     )
 
@@ -592,11 +612,16 @@ async def handle_yes_no_available(callback: CallbackQuery, state: FSMContext) ->
             f"Исходные данные пользователя: {data.get('device_raw_input', '')}\n"
             f"Телефон для связи (доступен): {data.get('device_phone')}"
         )
-        await send_to_admin(callback.bot, admin_text)
+        delivered = await send_to_admin(callback.bot, admin_text)
         await state.clear()
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
-            "Спасибо! Мы получили запрос и свяжемся с вами по указанному номеру.",
+            (
+                "Спасибо! Мы получили запрос и свяжемся с вами по указанному номеру."
+                if delivered
+                else "Номер получили, но не удалось передать запрос администратору. "
+                "Проверьте корректность ADMIN_IDS."
+            ),
             reply_markup=main_menu_keyboard(),
         )
         return
@@ -671,7 +696,10 @@ async def main() -> None:
     if not bot_token:
         raise RuntimeError("BOT_TOKEN is not set in environment")
 
-    bot = Bot(token=bot_token, parse_mode=ParseMode.HTML)
+    bot = Bot(
+        token=bot_token,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
     dp = Dispatcher(storage=MemoryStorage())
 
     dp.message.register(start_handler, CommandStart())
