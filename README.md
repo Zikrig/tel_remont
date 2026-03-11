@@ -34,7 +34,7 @@
   - списки/структуры в формате JSON:
     - `repair_categories`,
     - `repair_models_by_category`,
-    - `repair_problems_by_category` (разные проблемы для каждой категории устройства),
+    - `repair_problems_*` (отдельный JSON-массив проблем для каждой категории, например `repair_problems_apple`),
     - `repair_laptop_models`,
     - `repair_problem_texts` (описания и цены услуг),
     - `offices`, `office_addresses`,

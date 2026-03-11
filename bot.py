@@ -65,7 +65,7 @@ ADMIN_FIELD_LABELS = {
     "repair_categories": "Категории ремонта (JSON-массив объектов key/title)",
     "repair_models_by_category": "Модели по категориям (JSON-объект key -> массив)",
     "repair_laptop_models": "Модели ноутбуков (JSON-массив строк)",
-    "repair_problems_by_category": "Проблемы по категориям (JSON-объект key -> массив key/title)",
+    "repair_problems_by_category_entry": "Проблемы по категориям",
     "repair_problem_texts": "Описания/цены проблем (JSON-объект)",
     "repair_time_slots": "Слоты времени (JSON-массив строк)",
     "repair_confirmation_template": "Шаблон подтверждения записи",
@@ -94,7 +94,7 @@ ADMIN_FIELDS_BY_SECTION = {
         "repair_categories",
         "repair_models_by_category",
         "repair_laptop_models",
-        "repair_problems_by_category",
+        "repair_problems_by_category_entry",
         "repair_problem_texts",
         "repair_time_slots",
     ],
@@ -109,7 +109,6 @@ ADMIN_JSON_FIELDS = {
     "repair_categories",
     "repair_models_by_category",
     "repair_laptop_models",
-    "repair_problems_by_category",
     "repair_problem_texts",
     "repair_time_slots",
 }
@@ -134,6 +133,12 @@ class UserStates(StatesGroup):
 
 class AdminEditStates(StatesGroup):
     waiting_new_value = State()
+
+
+def back_keyboard(callback_data: str, text: str = "⬅️ Назад") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=text, callback_data=callback_data)]]
+    )
 
 
 def get_admin_ids() -> List[int]:
@@ -175,6 +180,10 @@ def cfg_text(key: str, default: str) -> str:
     return normalize_text(value)
 
 
+def repair_problem_category_key(category_key: str) -> str:
+    return f"repair_problems_{category_key}"
+
+
 def main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -193,7 +202,8 @@ def yes_no_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="Да", callback_data="yes_available"),
                 InlineKeyboardButton(text="Нет", callback_data="no_available"),
-            ]
+            ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_device_info")],
         ]
     )
 
@@ -217,6 +227,26 @@ def admin_section_keyboard(section_key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def admin_problem_categories_keyboard() -> InlineKeyboardMarkup:
+    get_cfg()
+    rows: List[List[InlineKeyboardButton]] = []
+    for item in config.get("repair_categories", []):
+        key = item.get("key")
+        title = item.get("title", key)
+        if not key:
+            continue
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=title,
+                    callback_data=f"admin_edit_problem_cat_{key}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_section_json")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def repair_categories_keyboard() -> InlineKeyboardMarkup:
     get_cfg()
     categories = config.get("repair_categories", [])
@@ -230,23 +260,27 @@ def repair_categories_keyboard() -> InlineKeyboardMarkup:
                 for item in block
             ]
         )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main_menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def repair_models_keyboard(models: List[str]) -> InlineKeyboardMarkup:
+def repair_models_keyboard(models: List[str], back_callback: str = "back_repair_categories") -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
     indexed_models = list(enumerate(models))
     for block in chunks(indexed_models, 3):
         rows.append(
             [InlineKeyboardButton(text=name, callback_data=f"repair_model_{idx}") for idx, name in block]
         )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def get_problem_options_for_category(category_key: str) -> List[tuple[str, str]]:
     get_cfg()
-    by_category = config.get("repair_problems_by_category", {})
-    raw_options = by_category.get(category_key)
+    raw_options = config.get(repair_problem_category_key(category_key))
+    if raw_options is None:
+        by_category = config.get("repair_problems_by_category", {})
+        raw_options = by_category.get(category_key)
     if not raw_options:
         return REPAIR_PROBLEM_KEYS
 
@@ -260,21 +294,26 @@ def get_problem_options_for_category(category_key: str) -> List[tuple[str, str]]
     return options or REPAIR_PROBLEM_KEYS
 
 
-def repair_problems_keyboard(problem_options: List[tuple[str, str]]) -> InlineKeyboardMarkup:
+def repair_problems_keyboard(
+    problem_options: List[tuple[str, str]], back_callback: str
+) -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
     for block in chunks(problem_options, 3):
         rows.append(
             [InlineKeyboardButton(text=title, callback_data=f"repair_prob_{key}") for key, title in block]
         )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def offices_keyboard(prefix: str) -> InlineKeyboardMarkup:
+def offices_keyboard(prefix: str, back_callback: Optional[str] = None) -> InlineKeyboardMarkup:
     get_cfg()
     rows = [
         [InlineKeyboardButton(text=office, callback_data=f"{prefix}_{idx}")]
         for idx, office in enumerate(config.get("offices", []))
     ]
+    if back_callback:
+        rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -283,6 +322,7 @@ def repair_day_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="Завтра", callback_data="repair_day_tomorrow")],
             [InlineKeyboardButton(text="Другой день", callback_data="repair_day_other")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_repair_office")],
         ]
     )
 
@@ -295,6 +335,7 @@ def repair_time_keyboard() -> InlineKeyboardMarkup:
     for block in chunks(list(enumerate(slots)), 3):
         rows.append([InlineKeyboardButton(text=slot, callback_data=f"repair_time_{idx}") for idx, slot in block])
     rows.append([InlineKeyboardButton(text=any_time, callback_data="repair_time_any")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_repair_day")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -375,17 +416,17 @@ async def repair_category_handler(callback: CallbackQuery, state: FSMContext) ->
         await state.set_state(UserStates.repair_choose_model)
         await callback.message.edit_text(
             "Выберите модель:",
-            reply_markup=repair_models_keyboard(models),
+            reply_markup=repair_models_keyboard(models, "back_repair_categories"),
         )
         return
 
     await state.update_data(repair_device=title)
     problem_options = get_problem_options_for_category(key)
-    await state.update_data(repair_problem_options=problem_options)
+    await state.update_data(repair_problem_options=problem_options, repair_problem_back="back_repair_categories")
     await state.set_state(UserStates.repair_choose_problem)
     await callback.message.edit_text(
         "Выберите проблему:",
-        reply_markup=repair_problems_keyboard(problem_options),
+        reply_markup=repair_problems_keyboard(problem_options, "back_repair_categories"),
     )
 
 
@@ -403,11 +444,11 @@ async def repair_model_handler(callback: CallbackQuery, state: FSMContext) -> No
     await state.update_data(repair_device=models[idx])
     category_key = data.get("repair_category_key", "")
     problem_options = get_problem_options_for_category(category_key)
-    await state.update_data(repair_problem_options=problem_options)
+    await state.update_data(repair_problem_options=problem_options, repair_problem_back="back_repair_models")
     await state.set_state(UserStates.repair_choose_problem)
     await callback.message.edit_text(
         "Выберите проблему:",
-        reply_markup=repair_problems_keyboard(problem_options),
+        reply_markup=repair_problems_keyboard(problem_options, "back_repair_models"),
     )
 
 
@@ -426,20 +467,25 @@ async def repair_problem_handler(callback: CallbackQuery, state: FSMContext) -> 
     if problem_key == "other":
         await state.set_state(UserStates.repair_other_problem)
         await callback.message.edit_text(
-            f"{text}\n\n{cfg_text('repair_other_problem_prompt', 'Опишите проблему.')}"
+            f"{text}\n\n{cfg_text('repair_other_problem_prompt', 'Опишите проблему.')}",
+            reply_markup=back_keyboard("back_repair_problems"),
         )
         return
 
     await state.set_state(UserStates.repair_description)
     await callback.message.edit_text(
-        f"{text}\n\n{cfg_text('repair_description_prompt', 'Опишите проблему подробнее.')}"
+        f"{text}\n\n{cfg_text('repair_description_prompt', 'Опишите проблему подробнее.')}",
+        reply_markup=back_keyboard("back_repair_problems"),
     )
 
 
 async def repair_other_problem_handler(message: Message, state: FSMContext) -> None:
     await state.update_data(repair_problem_custom=(message.text or "").strip())
     await state.set_state(UserStates.repair_description)
-    await message.answer(cfg_text("repair_description_prompt", "Опишите проблему подробнее."))
+    await message.answer(
+        cfg_text("repair_description_prompt", "Опишите проблему подробнее."),
+        reply_markup=back_keyboard("back_repair_problems"),
+    )
 
 
 async def repair_description_handler(message: Message, state: FSMContext) -> None:
@@ -447,7 +493,7 @@ async def repair_description_handler(message: Message, state: FSMContext) -> Non
     await state.set_state(UserStates.repair_choose_office)
     await message.answer(
         cfg_text("repair_choose_office_text", "Выберите офис:"),
-        reply_markup=offices_keyboard("repair_office"),
+        reply_markup=offices_keyboard("repair_office", "back_repair_description"),
     )
 
 
@@ -515,13 +561,19 @@ async def repair_time_handler(callback: CallbackQuery, state: FSMContext) -> Non
         picked = slots[idx]
     await state.update_data(repair_time=picked)
     await state.set_state(UserStates.repair_ask_name)
-    await callback.message.edit_text(cfg_text("repair_ask_name_text", "Как вас зовут?"))
+    await callback.message.edit_text(
+        cfg_text("repair_ask_name_text", "Как вас зовут?"),
+        reply_markup=back_keyboard("back_repair_time"),
+    )
 
 
 async def repair_name_handler(message: Message, state: FSMContext) -> None:
     await state.update_data(repair_name=(message.text or "").strip())
     await state.set_state(UserStates.repair_ask_contact)
-    await message.answer(cfg_text("repair_ask_contact_text", "Укажите телефон или @username"))
+    await message.answer(
+        cfg_text("repair_ask_contact_text", "Укажите телефон или @username"),
+        reply_markup=back_keyboard("back_repair_name"),
+    )
 
 
 async def repair_contact_handler(message: Message, state: FSMContext) -> None:
@@ -607,7 +659,7 @@ async def menu_device_service_handler(callback: CallbackQuery, state: FSMContext
     await state.set_state(UserStates.waiting_device_office)
     await callback.message.edit_text(
         "Выберите офис, в который обращались:",
-        reply_markup=offices_keyboard("device_office"),
+        reply_markup=offices_keyboard("device_office", "back_main_menu"),
     )
 
 
@@ -622,7 +674,8 @@ async def device_office_handler(callback: CallbackQuery, state: FSMContext) -> N
     await state.update_data(chosen_office=office_name)
     await state.set_state(UserStates.waiting_device_info)
     await callback.message.edit_text(
-        cfg_text("device_in_service_prompt", "Напишите номер заказа или телефон, указанный в заказе.")
+        cfg_text("device_in_service_prompt", "Напишите номер заказа или телефон, указанный в заказе."),
+        reply_markup=back_keyboard("back_device_office"),
     )
 
 
@@ -638,7 +691,10 @@ async def handle_device_info(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(device_order=value if is_order_number(value) else None)
     await state.set_state(UserStates.waiting_contact_for_device)
-    await message.answer(cfg_text("ask_contact_text", "Пожалуйста, отправьте телефон или @username"))
+    await message.answer(
+        cfg_text("ask_contact_text", "Пожалуйста, отправьте телефон или @username"),
+        reply_markup=back_keyboard("back_device_info"),
+    )
 
 
 async def handle_device_contact(message: Message, state: FSMContext) -> None:
@@ -695,7 +751,117 @@ async def handle_yes_no_available(callback: CallbackQuery, state: FSMContext) ->
         )
         return
     await state.set_state(UserStates.waiting_contact_for_device)
-    await callback.message.edit_text(cfg_text("ask_contact_text", "Пожалуйста, отправьте телефон или @username"))
+    await callback.message.edit_text(
+        cfg_text("ask_contact_text", "Пожалуйста, отправьте телефон или @username"),
+        reply_markup=back_keyboard("back_device_info"),
+    )
+
+
+async def back_to_main_menu_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.clear()
+    await callback.message.edit_text(
+        cfg_text("menu_text", "Выберите раздел:"),
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+async def back_repair_categories_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(UserStates.repair_choose_category)
+    await callback.message.edit_text(
+        "Выберите категорию устройства:",
+        reply_markup=repair_categories_keyboard(),
+    )
+
+
+async def back_repair_models_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    data = await state.get_data()
+    models = data.get("repair_models", [])
+    if not models:
+        await back_repair_categories_handler(callback, state)
+        return
+    await state.set_state(UserStates.repair_choose_model)
+    await callback.message.edit_text(
+        "Выберите модель:",
+        reply_markup=repair_models_keyboard(models, "back_repair_categories"),
+    )
+
+
+async def back_repair_problems_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    data = await state.get_data()
+    options = data.get("repair_problem_options", REPAIR_PROBLEM_KEYS)
+    back_cb = data.get("repair_problem_back", "back_repair_categories")
+    await state.set_state(UserStates.repair_choose_problem)
+    await callback.message.edit_text(
+        "Выберите проблему:",
+        reply_markup=repair_problems_keyboard(options, back_cb),
+    )
+
+
+async def back_repair_description_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(UserStates.repair_description)
+    await callback.message.edit_text(
+        cfg_text("repair_description_prompt", "Опишите проблему подробнее."),
+        reply_markup=back_keyboard("back_repair_problems"),
+    )
+
+
+async def back_repair_office_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(UserStates.repair_choose_office)
+    await callback.message.edit_text(
+        cfg_text("repair_choose_office_text", "Выберите офис:"),
+        reply_markup=offices_keyboard("repair_office", "back_repair_description"),
+    )
+
+
+async def back_repair_day_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(UserStates.repair_choose_day)
+    await callback.message.edit_text(
+        cfg_text("repair_choose_day_text", "Выберите день записи:"),
+        reply_markup=repair_day_keyboard(),
+    )
+
+
+async def back_repair_time_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(UserStates.repair_choose_time)
+    await callback.message.edit_text(
+        cfg_text("repair_choose_time_text", "Выберите время:"),
+        reply_markup=repair_time_keyboard(),
+    )
+
+
+async def back_repair_name_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(UserStates.repair_ask_name)
+    await callback.message.edit_text(
+        cfg_text("repair_ask_name_text", "Как вас зовут?"),
+        reply_markup=back_keyboard("back_repair_time"),
+    )
+
+
+async def back_device_office_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(UserStates.waiting_device_office)
+    await callback.message.edit_text(
+        "Выберите офис, в который обращались:",
+        reply_markup=offices_keyboard("device_office", "back_main_menu"),
+    )
+
+
+async def back_device_info_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(UserStates.waiting_device_info)
+    await callback.message.edit_text(
+        cfg_text("device_in_service_prompt", "Напишите номер заказа или телефон, указанный в заказе."),
+        reply_markup=back_keyboard("back_device_office"),
+    )
 
 
 async def admin_command_handler(message: Message) -> None:
@@ -742,6 +908,13 @@ async def admin_edit_button_handler(callback: CallbackQuery, state: FSMContext) 
     if field_key not in ADMIN_FIELD_LABELS:
         await callback.message.answer("Неизвестный параметр.")
         return
+    if field_key == "repair_problems_by_category_entry":
+        await state.clear()
+        await callback.message.edit_text(
+            "Проблемы по категориям. Выберите категорию:",
+            reply_markup=admin_problem_categories_keyboard(),
+        )
+        return
 
     get_cfg()
     await state.set_state(AdminEditStates.waiting_new_value)
@@ -759,6 +932,32 @@ async def admin_edit_button_handler(callback: CallbackQuery, state: FSMContext) 
     )
 
 
+async def admin_edit_problem_category_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    await callback.answer()
+
+    category_key = callback.data.replace("admin_edit_problem_cat_", "", 1)
+    category_title = category_title_by_key(category_key)
+
+    get_cfg()
+    current_value = config.get(repair_problem_category_key(category_key))
+    if current_value is None:
+        by_category = config.get("repair_problems_by_category", {})
+        current_value = by_category.get(category_key, [])
+    serialized = json.dumps(current_value, ensure_ascii=False, indent=2)
+
+    await state.set_state(AdminEditStates.waiting_new_value)
+    await state.update_data(edit_field=f"repair_problems_by_category:{category_key}")
+
+    await callback.message.edit_text(
+        f"Редактирование: Проблемы категории «{category_title}»\n\n"
+        "Отправьте новый JSON-массив одним сообщением.\n\n"
+        f"Текущее значение:\n{serialized}"
+    )
+
+
 async def admin_new_value_handler(message: Message, state: FSMContext) -> None:
     if not is_admin(message.from_user.id):
         return
@@ -771,6 +970,21 @@ async def admin_new_value_handler(message: Message, state: FSMContext) -> None:
         return
     get_cfg()
     raw = message.text or ""
+    if field_key.startswith("repair_problems_by_category:"):
+        category_key = field_key.split(":", 1)[1]
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            await message.answer("Ошибка JSON. Проверьте формат и отправьте снова.")
+            return
+        if not isinstance(parsed, list):
+            await message.answer("Нужен JSON-массив для выбранной категории.")
+            return
+        config[repair_problem_category_key(category_key)] = parsed
+        save_config(config)
+        await state.clear()
+        await message.answer("Сохранено.", reply_markup=admin_problem_categories_keyboard())
+        return
     if field_key in ADMIN_JSON_FIELDS:
         try:
             parsed = json.loads(raw)
@@ -805,6 +1019,7 @@ async def main() -> None:
     dp.callback_query.register(menu_price_handler, F.data == "menu_price")
     dp.callback_query.register(menu_device_service_handler, F.data == "menu_device_service")
     dp.callback_query.register(menu_warranty_handler, F.data == "menu_warranty")
+    dp.callback_query.register(back_to_main_menu_handler, F.data == "back_main_menu")
 
     dp.callback_query.register(repair_category_handler, F.data.startswith("repair_cat_"))
     dp.callback_query.register(repair_model_handler, F.data.startswith("repair_model_"))
@@ -817,14 +1032,27 @@ async def main() -> None:
     dp.callback_query.register(repair_time_handler, F.data.startswith("repair_time_"))
     dp.message.register(repair_name_handler, UserStates.repair_ask_name)
     dp.message.register(repair_contact_handler, UserStates.repair_ask_contact)
+    dp.callback_query.register(back_repair_categories_handler, F.data == "back_repair_categories")
+    dp.callback_query.register(back_repair_models_handler, F.data == "back_repair_models")
+    dp.callback_query.register(back_repair_problems_handler, F.data == "back_repair_problems")
+    dp.callback_query.register(back_repair_description_handler, F.data == "back_repair_description")
+    dp.callback_query.register(back_repair_office_handler, F.data == "back_repair_office")
+    dp.callback_query.register(back_repair_day_handler, F.data == "back_repair_day")
+    dp.callback_query.register(back_repair_time_handler, F.data == "back_repair_time")
+    dp.callback_query.register(back_repair_name_handler, F.data == "back_repair_name")
 
     dp.callback_query.register(device_office_handler, F.data.startswith("device_office_"))
     dp.message.register(handle_device_info, UserStates.waiting_device_info)
     dp.message.register(handle_device_contact, UserStates.waiting_contact_for_device)
     dp.callback_query.register(handle_yes_no_available, F.data.in_(["yes_available", "no_available"]))
+    dp.callback_query.register(back_device_office_handler, F.data == "back_device_office")
+    dp.callback_query.register(back_device_info_handler, F.data == "back_device_info")
 
     dp.callback_query.register(admin_root_handler, F.data == "admin_root")
     dp.callback_query.register(admin_section_handler, F.data.startswith("admin_section_"))
+    dp.callback_query.register(
+        admin_edit_problem_category_handler, F.data.startswith("admin_edit_problem_cat_")
+    )
     dp.callback_query.register(admin_edit_button_handler, F.data.startswith("admin_edit_"))
     dp.message.register(admin_new_value_handler, AdminEditStates.waiting_new_value)
 
